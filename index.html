@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1c1c1c" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Superhero" />
+  <title>💪 Superhero Tracker</title>
+
+  <script>
+    const manifestData = {
+      name: "Superhero Workout Tracker",
+      short_name: "Superhero",
+      description: "Pelin & Ahmet workout tracker",
+      start_url: "./",
+      display: "standalone",
+      background_color: "#111111",
+      theme_color: "#e8722a",
+      orientation: "portrait",
+      icons: [
+        { src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='32' fill='%23e8722a'/><text y='140' x='20' font-size='130'>💪</text></svg>", sizes: "192x192", type: "image/svg+xml" },
+        { src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='80' fill='%23e8722a'/><text y='380' x='40' font-size='360'>💪</text></svg>", sizes: "512x512", type: "image/svg+xml" }
+      ]
+    };
+    const blob = new Blob([JSON.stringify(manifestData)], {type: 'application/json'});
+    const manifestURL = URL.createObjectURL(blob);
+    document.write('<link rel="manifest" href="' + manifestURL + '">');
+  </script>
+
+  <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'><rect width='180' height='180' rx='30' fill='%23e8722a'/><text y='135' x='15' font-size='120'>💪</text></svg>" />
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body { background: #111; overflow-x: hidden; }
+    input[type=number] { -moz-appearance: textfield; }
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+    #root { min-height: 100vh; }
+
+    #install-banner {
+      display: none; position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+      width: calc(100% - 32px); max-width: 448px;
+      background: linear-gradient(135deg, #1f1f1f, #2a2a2a);
+      border: 1px solid rgba(232,114,42,.4); border-radius: 16px; padding: 14px 16px;
+      z-index: 9999; box-shadow: 0 8px 32px rgba(0,0,0,.6);
+      align-items: center; gap: 12px;
+    }
+    #install-banner.show { display: flex; }
+    #install-banner p { flex: 1; font-size: 13px; color: #f0e6d3; font-family: 'Trebuchet MS', sans-serif; }
+    #install-banner p strong { color: #f5c842; }
+    #install-btn { background: linear-gradient(135deg, #e8722a, #c45a1a); border: none; border-radius: 10px; color: #fff; font-size: 13px; font-weight: 800; padding: 8px 14px; cursor: pointer; font-family: 'Trebuchet MS', sans-serif; white-space: nowrap; }
+    #dismiss-btn { background: transparent; border: none; color: #6b7280; font-size: 18px; cursor: pointer; padding: 4px; }
+
+    .sync-toast {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+      background: #1f1f1f; border: 1px solid rgba(52,211,153,.4);
+      border-radius: 12px; padding: 10px 16px; z-index: 9999;
+      font-family: 'Trebuchet MS', sans-serif; font-size: 13px; color: #6ee7b7;
+      box-shadow: 0 4px 20px rgba(0,0,0,.5); display: flex; align-items: center; gap: 8px;
+      transition: opacity .3s; pointer-events: none;
+    }
+    .sync-toast.hidden { opacity: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <div id="install-banner">
+    <p>📱 <strong>Ana ekrana ekle!</strong> Uygulama olarak kullan.</p>
+    <button id="install-btn">Yükle</button>
+    <button id="dismiss-btn">✕</button>
+  </div>
+  <div id="sync-toast" class="sync-toast hidden"></div>
+
+  <!-- Firebase -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyADCLTsk_aobWXMWm5zFKuHJTMDXS1mZZE",
+      authDomain: "superhero-tracker-c7aa9.firebaseapp.com",
+      projectId: "superhero-tracker-c7aa9",
+      storageBucket: "superhero-tracker-c7aa9.firebasestorage.app",
+      messagingSenderId: "620638929484",
+      appId: "1:620638929484:web:7ec2b6d78239b34972aae9",
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // Firestore'a kaydet (debounced)
+    let saveTimers = {};
+    window.saveToFirestore = async (userId, data, bodyWeight) => {
+      clearTimeout(saveTimers[userId]);
+      saveTimers[userId] = setTimeout(async () => {
+        try {
+          const payload = { data: JSON.stringify(data), updatedAt: Date.now() };
+          if (bodyWeight !== undefined) payload.bodyWeight = bodyWeight;
+          await setDoc(doc(db, "trackers", userId), payload);
+          showToast("☁️ Kaydedildi");
+        } catch (e) {
+          showToast("⚠️ Kayıt hatası: " + e.message, true);
+        }
+      }, 1200);
+    };
+
+    // Firestore'dan yükle
+    window.loadFromFirestore = async (userId) => {
+      try {
+        const snap = await getDoc(doc(db, "trackers", userId));
+        if (snap.exists() && snap.data().data) {
+          const parsed = JSON.parse(snap.data().data);
+          if (parsed && typeof parsed === "object" && parsed["Hafta 1"]) {
+            return { workoutData: parsed, bodyWeight: snap.data().bodyWeight ?? null };
+          }
+        }
+      } catch (e) {
+        console.warn("Firestore load error:", e);
+      }
+      return null;
+    };
+
+    window.firebaseReady = true;
+    window.dispatchEvent(new Event("firebase-ready"));
+
+    function showToast(msg, isError = false) {
+      const t = document.getElementById("sync-toast");
+      t.textContent = msg;
+      t.style.borderColor = isError ? "rgba(239,68,68,.4)" : "rgba(52,211,153,.4)";
+      t.style.color = isError ? "#fca5a5" : "#6ee7b7";
+      t.classList.remove("hidden");
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => t.classList.add("hidden"), 2500);
+    }
+  </script>
+
+  <!-- React + Babel -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const EXCEL_DATA = {
+      "Hafta 1": {
+        "Bench Press": { weight: 7.5, sets: [5, 5, 5, 5], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 25, sets: [10, 10, 10], note: null, workout: "A" },
+        "Romanian DL": { weight: 25, sets: [8, 8, 8], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 20, sets: [14, 14, 12], note: null, workout: "A" },
+        "Leg Extension": { weight: 27.5, sets: [14, 14, 14], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [30, 30, 30], note: null, workout: "A" },
+        "Squat": { weight: 10, sets: [10, 10, 10, 5], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [9, 9, 7], note: null, workout: "B" },
+        "Cable Lateral Raises": { weight: 2.5, sets: [14, 14, 14], note: null, workout: "B" },
+        "Incline Dumbbell Curl": { weight: 5, sets: [10, 12, 12], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [20, 20, 20], note: null, workout: "B" },
+        "Over Head Press": { weight: 7.5, sets: [6, 6, 6, 6], note: null, workout: "C" },
+        "Machine Row": { weight: 20, sets: [10, 10, 10, 10], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 10, sets: [14, 14, 10], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 17.5, sets: [10, 10, 10], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [60, 60, 60], note: null, workout: "C" },
+      },
+      "Hafta 2": {
+        "Bench Press": { weight: 10, sets: [5, 5, 5, 5], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 27.5, sets: [10, 10, 10], note: null, workout: "A" },
+        "Romanian DL": { weight: 30, sets: [8, 8, 8], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 20, sets: [14, 14, 14], note: null, workout: "A" },
+        "Leg Extension": { weight: 32.5, sets: [14, 14, 14], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [30, 30, 30], note: null, workout: "A" },
+        "Squat": { weight: 15, sets: [6, 10, 10, 8], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [7, 7, 7], note: "50kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 7.5, sets: [14, 14, 14], note: "4+4 dumbell", workout: "B" },
+        "Incline Dumbbell Curl": { weight: 5, sets: [12, 12, 12], note: "5+5 dumbell", workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [30, 30, 30], note: null, workout: "B" },
+        "Over Head Press": { weight: 10, sets: [5, 5, 5, 5], note: null, workout: "C" },
+        "Machine Row": { weight: 22.5, sets: [10, 10, 10, 10], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 10, sets: [14, 14, 14], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 17.5, sets: [12, 12, 12], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: ["1dk", "1dk", "1dk 30sn"], note: null, workout: "C" },
+      },
+      "Hafta 3": {
+        "Bench Press": { weight: 12.5, sets: [3, 3, 3, 3], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 30, sets: [10, 10, 10], note: null, workout: "A" },
+        "Romanian DL": { weight: 35, sets: [8, 8, 8], note: "-10 kg barbell ağırlığı", workout: "A" },
+        "Lat Pulldown": { weight: 25, sets: [14, 14, 14], note: null, workout: "A" },
+        "Leg Extension": { weight: 37.5, sets: [14, 14, 14], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [30, 30, 30], note: null, workout: "A" },
+        "Squat": { weight: 20, sets: [5, 5, 5, 6], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [8, 7, 6], note: "50kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 12.5, sets: [14, 14, 14], note: "5+5 dumbell", workout: "B" },
+        "Incline Dumbbell Curl": { weight: 10, sets: [12, 12, 12], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [30, 30, 40], note: null, workout: "B" },
+        "Over Head Press": { weight: 12.5, sets: [3, 3, 3, 3], note: null, workout: "C" },
+        "Machine Row": { weight: 25, sets: [10, 10, 10, 10], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 15, sets: [6, 6, 6], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [10, 12, 10], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: ["1dk", "1dk", "1dk"], note: null, workout: "C" },
+      },
+      "Hafta 4": {
+        "Bench Press": { weight: 12.5, sets: [5, 6, 5, 6], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 32.5, sets: [10, 10, 10], note: "35kg", workout: "A" },
+        "Romanian DL": { weight: 40, sets: [10, 8, 8], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [14, 12, 12], note: null, workout: "A" },
+        "Leg Extension": { weight: 42.5, sets: [14, 14, 14], note: "45kg", workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [30, 30, 30], note: "bacaklar masa pozisyonunda", workout: "A" },
+        "Squat": { weight: 25, sets: [5, 5, 5, 5], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [14, 12, 12], note: "50kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 17.5, sets: [12, 14, 14], note: "5×5 dumbell", workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [3, 4, 3], note: "7.5×7.5 dumbell", workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [15, 15, 15], note: "makina", workout: "B" },
+        "Over Head Press": { weight: 12.5, sets: [3, 3, 4, 3], note: null, workout: "C" },
+        "Machine Row": { weight: 27.5, sets: [10, 10, 10, 10], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 15, sets: [7, 7, 6], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [10, 12, 12], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [], note: null, workout: "C" },
+      },
+      "Hafta 5": {
+        "Bench Press": { weight: 15, sets: [4, 4, 2, 4], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 35, sets: [10, 10, 10], note: "40kg", workout: "A" },
+        "Romanian DL": { weight: 45, sets: [8, 8, 8], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [12, 12, 10], note: null, workout: "A" },
+        "Leg Extension": { weight: 47.5, sets: [14, 14, 14], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [20, 20, 20], note: null, workout: "A" },
+        "Squat": { weight: 30, sets: [2, 1, 1, 0], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [15, 12, 11], note: "44kg", workout: "B" },
+        "Cable Lateral Raises": { weight: 17.5, sets: [10, 10, 10], note: "5x5", workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [5, 4, 3], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "B" },
+        "Over Head Press": { weight: 12.5, sets: [], note: null, workout: "C" },
+        "Machine Row": { weight: 30, sets: [], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 15, sets: [], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [], note: null, workout: "C" },
+      },
+      "Hafta 6": {
+        "Bench Press": { weight: 12.5, sets: [5, 7, 7, 6], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 37.5, sets: [10, 10, 10], note: "40kg", workout: "A" },
+        "Romanian DL": { weight: 50, sets: [1, 2, 3], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [12, 9, 10], note: null, workout: "A" },
+        "Leg Extension": { weight: 52.5, sets: [8, 8, 8], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [20, 20, 20], note: null, workout: "A" },
+        "Squat": { weight: 27.5, sets: [5, 5, 5, 5], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [5, 4, 4], note: "40kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 17.5, sets: [10, 10, 10], note: null, workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [5, 4, 3], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "B" },
+        "Over Head Press": { weight: 12.5, sets: [5, 0, 0, 0], note: null, workout: "C" },
+        "Machine Row": { weight: 27.5, sets: [10, 10, 10, 10], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 15, sets: [14, 14, 14], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [12, 7, 8], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [], note: null, workout: "C" },
+      },
+      "Hafta 7": {
+        "Bench Press": { weight: 15, sets: [5, 5, 5, 5], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 40, sets: [0, 0, 0], note: "over gym 29kg da 10×9×10", workout: "A" },
+        "Romanian DL": { weight: 45, sets: [8, 8, 8], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [10, 10, 8], note: null, workout: "A" },
+        "Leg Extension": { weight: 52.5, sets: [10, 10, 12], note: "54", workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "A" },
+        "Squat": { weight: 32.5, sets: [5, 5, 7, 7], note: "bar 15kg", workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [5, 5, 5], note: "36 kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 17.5, sets: [8, 7, 12], note: "2.5", workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [4, 4, 3], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [20, 20, 20], note: null, workout: "B" },
+        "Over Head Press": { weight: 12.5, sets: [6, 7, 6, 5], note: "15kg boş bar", workout: "C" },
+        "Machine Row": { weight: 30, sets: [10, 10, 10, 10], note: "29", workout: "C" },
+        "Chest Fly Machine": { weight: 20, sets: [14, 14, 14], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [8, 4, 3], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: ["1dk", "1dk", "1dk"], note: null, workout: "C" },
+      },
+      "Hafta 8": {
+        "Bench Press": { weight: 17.5, sets: [10, 10, 10, 10], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 35, sets: [10, 10, 10], note: null, workout: "A" },
+        "Romanian DL": { weight: 50, sets: [8, 6, 5], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [10, 14, 10], note: null, workout: "A" },
+        "Leg Extension": { weight: 52.5, sets: [12, 14, 14], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "A" },
+        "Squat": { weight: 37.5, sets: [7, 7, 7, 7], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [5, 5, 5], note: "36kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 17.5, sets: [14, 10, 14], note: "2.5 cable", workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [6, 5, 5], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [20, 20, 20], note: null, workout: "B" },
+        "Over Head Press": { weight: 15, sets: [9, 7, 5, 5], note: null, workout: "C" },
+        "Machine Row": { weight: 32.5, sets: [10, 10, 8, 8], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 25, sets: [14, 10, 8], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [4, 0, 0], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [], note: null, workout: "C" },
+      },
+      "Hafta 9": {
+        "Bench Press": { weight: 20, sets: [10, 10, 10, 10], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 37.5, sets: [10, 10, 10], note: "39kg", workout: "A" },
+        "Romanian DL": { weight: 45, sets: [8, 8, 8], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [10, 10, 8], note: null, workout: "A" },
+        "Leg Extension": { weight: 52.5, sets: [], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "A" },
+        "Squat": { weight: 42.5, sets: [5, 10, 10, 10], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [2, 3, 2], note: "32kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 17.5, sets: [10, 10, 10], note: null, workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [8, 5, 3], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "B" },
+        "Over Head Press": { weight: 17.5, sets: [5, 5, 5, 5], note: null, workout: "C" },
+        "Machine Row": { weight: 30, sets: [10, 10, 10, 10], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 25, sets: [14, 14, 10], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [5, 5, 5], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [], note: null, workout: "C" },
+      },
+      "Hafta 10": {
+        "Bench Press": { weight: 22.5, sets: [7, 7, 7, 7], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 40, sets: [10, 10, 8], note: null, workout: "A" },
+        "Romanian DL": { weight: 50, sets: [8, 8, 4], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [10, 8, 8], note: null, workout: "A" },
+        "Leg Extension": { weight: 52.5, sets: [14, 10, 10], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "A" },
+        "Squat": { weight: 47.5, sets: [3, 3, 3], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [3, 4, 3], note: "32kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 17.5, sets: [14, 14, 14], note: "5", workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [8, 5, 4], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "B" },
+        "Over Head Press": { weight: 20, sets: [5, 3, 5, 3], note: null, workout: "C" },
+        "Machine Row": { weight: 32.5, sets: [10, 10, 10, 10], note: "34", workout: "C" },
+        "Chest Fly Machine": { weight: 25, sets: [14, 14, 14], note: "24", workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [8, 7, 5], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [], note: null, workout: "C" },
+      },
+      "Hafta 11": {
+        "Bench Press": { weight: 25, sets: [4, 5, 5, 5], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 35, sets: [10, 10, 10], note: "34", workout: "A" },
+        "Romanian DL": { weight: 45, sets: [8, 8, 8], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [10, 10, 8], note: null, workout: "A" },
+        "Leg Extension": { weight: 52.5, sets: [10, 10, 10], note: "54", workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [15, 15, 15], note: null, workout: "A" },
+        "Squat": { weight: 42.5, sets: [2, 3, 2, 3], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [2, 3, 3], note: "36kg assist", workout: "B" },
+        "Cable Lateral Raises": { weight: 22.5, sets: [8, 8, 8], note: "5", workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [8, 8, 8], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [15, 15, 25], note: null, workout: "B" },
+        "Over Head Press": { weight: 17.5, sets: [], note: null, workout: "C" },
+        "Machine Row": { weight: 35, sets: [], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 30, sets: [], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [], note: null, workout: "C" },
+      },
+      "Hafta 12": {
+        "Bench Press": { weight: 27.5, sets: [], note: null, workout: "A" },
+        "Shoulder Press Machine": { weight: 37.5, sets: [], note: null, workout: "A" },
+        "Romanian DL": { weight: 50, sets: [], note: null, workout: "A" },
+        "Lat Pulldown": { weight: 30, sets: [], note: null, workout: "A" },
+        "Leg Extension": { weight: 52.5, sets: [], note: null, workout: "A" },
+        "Crunch": { weight: "bodyweight", sets: [], note: null, workout: "A" },
+        "Squat": { weight: 37.5, sets: [], note: null, workout: "B" },
+        "Assisted Pull Ups": { weight: "bodyweight", sets: [], note: null, workout: "B" },
+        "Cable Lateral Raises": { weight: 22.5, sets: [], note: null, workout: "B" },
+        "Incline Dumbbell Curl": { weight: 15, sets: [], note: null, workout: "B" },
+        "Leg Raises": { weight: "bodyweight", sets: [], note: null, workout: "B" },
+        "Over Head Press": { weight: 15, sets: [], note: null, workout: "C" },
+        "Machine Row": { weight: 32.5, sets: [], note: null, workout: "C" },
+        "Chest Fly Machine": { weight: 30, sets: [], note: null, workout: "C" },
+        "Cable Pushdown": { weight: 22.5, sets: [], note: null, workout: "C" },
+        "Plank": { weight: "bodyweight", sets: [], note: null, workout: "C" },
+      },
+    };
+
+    const EXERCISES = {
+      "Bench Press":            { sets: 4, reps: 5,       inc: 2.5 },
+      "Squat":                  { sets: 4, reps: 5,       inc: 5   },
+      "Over Head Press":        { sets: 4, reps: 5,       inc: 2.5 },
+      "Shoulder Press Machine": { sets: 3, reps: 10,      inc: 2.5 },
+      "Romanian DL":            { sets: 3, reps: 8,       inc: 5   },
+      "Machine Row":            { sets: 4, reps: 10,      inc: 2.5 },
+      "Assisted Pull Ups":      { sets: 3, reps: "max",   inc: 0   },
+      "Cable Lateral Raises":   { sets: 3, reps: "10-14", inc: 5   },
+      "Lat Pulldown":           { sets: 3, reps: "10-14", inc: 5   },
+      "Chest Fly Machine":      { sets: 3, reps: "10-14", inc: 5   },
+      "Leg Extension":          { sets: 3, reps: "10-14", inc: 5   },
+      "Cable Pushdown":         { sets: 3, reps: "8-12",  inc: 5   },
+      "Incline Dumbbell Curl":  { sets: 3, reps: "8-12",  inc: 5   },
+      "Crunch":                 { sets: 3, reps: "max",   inc: 0   },
+      "Leg Raises":             { sets: 3, reps: "max",   inc: 0   },
+      "Plank":                  { sets: 3, reps: "max",   inc: 0   },
+    };
+
+    const WORKOUTS = {
+      A: ["Bench Press", "Shoulder Press Machine", "Romanian DL", "Lat Pulldown", "Leg Extension", "Crunch"],
+      B: ["Squat", "Bench Press", "Assisted Pull Ups", "Cable Lateral Raises", "Incline Dumbbell Curl", "Leg Raises"],
+      C: ["Over Head Press", "Squat", "Machine Row", "Chest Fly Machine", "Cable Pushdown", "Plank"],
+    };
+
+    const WORKOUT_OVERRIDES = {
+      B: { "Bench Press": { sets: 3, reps: 10 } },
+      C: { "Squat":       { sets: 3, reps: 10 } },
+    };
+
+    function getExConfig(ex, workout) {
+      const o = WORKOUT_OVERRIDES[workout]?.[ex];
+      return o ? { ...EXERCISES[ex], ...o } : EXERCISES[ex];
+    }
+
+    const WEEKS = Array.from({ length: 12 }, (_, i) => `Hafta ${i + 1}`);
+
+    function parseReps(reps) {
+      if (reps === "max") return { min: 1, max: 999 };
+      if (typeof reps === "string" && reps.includes("-")) {
+        const [a, b] = reps.split("-").map(Number);
+        return { min: a, max: b };
+      }
+      return { min: Number(reps), max: Number(reps) };
+    }
+
+    function checkSuccess(exercise, loggedSets, workout = "A") {
+      const ex = getExConfig(exercise, workout);
+      if (!ex || ex.reps === "max") return { success: true };
+      const valid = loggedSets.filter(s => s !== null && s !== undefined && s !== "" && !isNaN(Number(s)));
+      if (valid.length < ex.sets) return { success: false };
+      const { min } = parseReps(ex.reps);
+      return { success: valid.every(s => Number(s) >= min) };
+    }
+
+    const USERS = [
+      { id: "pelin", name: "Pelin", emoji: "🌸", defaultBw: 55 },
+      { id: "ahmet", name: "Ahmet", emoji: "💪", defaultBw: 80 },
+    ];
+
+    function App() {
+      const [activeUser, setActiveUser] = useState(0);
+      const [allData, setAllData] = useState({
+        pelin: JSON.parse(JSON.stringify(EXCEL_DATA)),
+        ahmet: JSON.parse(JSON.stringify(EXCEL_DATA)),
+      });
+      const [bodyWeights, setBodyWeights] = useState({ pelin: 55, ahmet: 80 });
+      const [loading, setLoading] = useState(true);
+      const [fbReady, setFbReady] = useState(false);
+
+      const userId = USERS[activeUser].id;
+      const data = allData[userId];
+      const bodyWeight = bodyWeights[userId];
+
+      // Firebase hazır olunca yükle
+      useEffect(() => {
+        if (window.firebaseReady) {
+          setFbReady(true);
+        } else {
+          window.addEventListener("firebase-ready", () => setFbReady(true));
+        }
+      }, []);
+
+      useEffect(() => {
+        if (!fbReady) return;
+        Promise.all(USERS.map(u => window.loadFromFirestore(u.id))).then(([pelinResult, ahmetResult]) => {
+          setAllData({
+            pelin: pelinResult?.workoutData || JSON.parse(JSON.stringify(EXCEL_DATA)),
+            ahmet: ahmetResult?.workoutData || JSON.parse(JSON.stringify(EXCEL_DATA)),
+          });
+          setBodyWeights({
+            pelin: pelinResult?.bodyWeight ?? 55,
+            ahmet: ahmetResult?.bodyWeight ?? 80,
+          });
+          setLoading(false);
+        });
+      }, [fbReady]);
+
+      // Veri değişince sadece aktif kullanıcıyı kaydet
+      const isFirstRender = useRef(true);
+      const prevData = useRef({});
+      useEffect(() => {
+        if (loading) return;
+        if (isFirstRender.current) {
+          isFirstRender.current = false;
+          prevData.current = { pelin: allData.pelin, ahmet: allData.ahmet };
+          return;
+        }
+        // Hangi kullanıcının verisi değiştiyse sadece onu kaydet
+        USERS.forEach(u => {
+          if (allData[u.id] !== prevData.current[u.id]) {
+            if (window.saveToFirestore) window.saveToFirestore(u.id, allData[u.id], bodyWeights[u.id]);
+          }
+        });
+        prevData.current = { pelin: allData.pelin, ahmet: allData.ahmet };
+      }, [allData, loading]);
+
+      // Vücut ağırlığı değişince kaydet
+      const prevBw = useRef({});
+      useEffect(() => {
+        if (loading) return;
+        if (!prevBw.current.pelin) { prevBw.current = { ...bodyWeights }; return; }
+        USERS.forEach(u => {
+          if (bodyWeights[u.id] !== prevBw.current[u.id]) {
+            if (window.saveToFirestore) window.saveToFirestore(u.id, allData[u.id], bodyWeights[u.id]);
+          }
+        });
+        prevBw.current = { ...bodyWeights };
+      }, [bodyWeights, loading]);
+
+      function setData(updater) {
+        setAllData(prev => ({
+          ...prev,
+          [userId]: typeof updater === "function" ? updater(prev[userId]) : updater,
+        }));
+      }
+      function setBodyWeight(val) {
+        setBodyWeights(prev => ({ ...prev, [userId]: val }));
+      }
+
+      const [weekIdx, setWeekIdx] = useState(10);
+      const [workout, setWorkout] = useState("A");
+      const [expanded, setExpanded] = useState(null);
+      const [showProgress, setShowProgress] = useState(false);
+      const [themeIdx, setThemeIdx] = useState(0);
+
+      const THEMES = [
+        { name: "🐾 Pawvera", bg: "linear-gradient(170deg,#1c1c1c 0%,#111111 40%,#0d0d0d 100%)", hbg: "#1c1c1c", primary: "#e8722a", pRgb: "232,114,42", light: "#f5c842", grad: "linear-gradient(90deg,#f5c842,#e8722a)", barGrad: "linear-gradient(90deg,#e8722a,#f5c842)", btnGrad: "linear-gradient(135deg,#e8722a,#c45a1a)", chartGrad: "linear-gradient(180deg,#f5c842,#e8722a)" },
+        { name: "🌸 Pembe",   bg: "linear-gradient(170deg,#1a0f1e 0%,#110a18 40%,#0c0812 100%)", hbg: "#1a1228", primary: "#db2777", pRgb: "219,39,119", light: "#fbcfe8", grad: "linear-gradient(90deg,#fbcfe8,#f0abfc)", barGrad: "linear-gradient(90deg,#db2777,#f9a8d4)", btnGrad: "linear-gradient(135deg,#db2777,#be185d)", chartGrad: "linear-gradient(180deg,#fbcfe8,#db2777)" },
+        { name: "🌊 Okyanus", bg: "linear-gradient(170deg,#081420 0%,#020b14 40%,#010810 100%)", hbg: "#031524", primary: "#0891b2", pRgb: "8,145,178", light: "#a5f3fc", grad: "linear-gradient(90deg,#a5f3fc,#67e8f9)", barGrad: "linear-gradient(90deg,#0891b2,#22d3ee)", btnGrad: "linear-gradient(135deg,#0891b2,#0e7490)", chartGrad: "linear-gradient(180deg,#a5f3fc,#0891b2)" },
+        { name: "☀️ Altın",   bg: "linear-gradient(170deg,#181200 0%,#0e0b00 40%,#0a0800 100%)", hbg: "#141200", primary: "#d97706", pRgb: "217,119,6", light: "#fde68a", grad: "linear-gradient(90deg,#fde68a,#fcd34d)", barGrad: "linear-gradient(90deg,#d97706,#fbbf24)", btnGrad: "linear-gradient(135deg,#d97706,#b45309)", chartGrad: "linear-gradient(180deg,#fde68a,#d97706)" },
+        { name: "🌿 Orman",   bg: "linear-gradient(170deg,#081408 0%,#030e03 40%,#020b02 100%)", hbg: "#031508", primary: "#16a34a", pRgb: "22,163,74", light: "#bbf7d0", grad: "linear-gradient(90deg,#bbf7d0,#86efac)", barGrad: "linear-gradient(90deg,#16a34a,#4ade80)", btnGrad: "linear-gradient(135deg,#16a34a,#15803d)", chartGrad: "linear-gradient(180deg,#bbf7d0,#16a34a)" },
+      ];
+      const T = THEMES[themeIdx];
+
+      const weekKey = WEEKS[weekIdx];
+      const exercises = WORKOUTS[workout];
+
+      function getEx(ex) { return data[weekKey]?.[ex] || { weight: null, sets: [], note: null }; }
+      function setWeight(ex, val) {
+        setData(prev => ({ ...prev, [weekKey]: { ...prev[weekKey], [ex]: { ...getEx(ex), weight: parseFloat(val) || 0 } } }));
+      }
+      function logSet(ex, idx, val) {
+        const exd = getEx(ex);
+        const sets = [...(exd.sets || [])];
+        sets[idx] = val === "" ? null : val;
+        setData(prev => ({ ...prev, [weekKey]: { ...prev[weekKey], [ex]: { ...exd, sets } } }));
+      }
+      function setNote(ex, val) {
+        setData(prev => ({ ...prev, [weekKey]: { ...prev[weekKey], [ex]: { ...getEx(ex), note: val } } }));
+      }
+      function setAssist(ex, val) {
+        setData(prev => ({ ...prev, [weekKey]: { ...prev[weekKey], [ex]: { ...getEx(ex), assist: parseFloat(val) || null } } }));
+      }
+
+      const completed = exercises.filter(ex => {
+        const targetSets = getExConfig(ex, workout)?.sets || 3;
+        const filled = (getEx(ex).sets || []).filter(s => s !== null && s !== "").length;
+        return filled >= targetSets;
+      }).length;
+
+      const S = {
+        page: { minHeight: "100vh", background: T.bg, color: "#f0e6d3", fontFamily: "'Trebuchet MS','Segoe UI',sans-serif", maxWidth: 480, margin: "0 auto" },
+        header: { background: `linear-gradient(160deg,${T.hbg},${T.hbg}dd)`, borderBottom: `1px solid rgba(${T.pRgb},.25)`, padding: "16px 18px 12px", position: "sticky", top: 0, zIndex: 100, backdropFilter: "blur(12px)" },
+        gradText: { background: T.grad, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" },
+        setInput: (col) => ({
+          width: "100%", padding: "11px 4px", textAlign: "center", boxSizing: "border-box",
+          background: col === "ok" ? "rgba(52,211,153,.1)" : col === "fail" ? "rgba(239,68,68,.1)" : "rgba(255,255,255,.04)",
+          border: `1.5px solid ${col === "ok" ? "rgba(52,211,153,.4)" : col === "fail" ? "rgba(239,68,68,.4)" : "rgba(255,255,255,.1)"}`,
+          borderRadius: 10, color: col === "ok" ? "#6ee7b7" : col === "fail" ? "#fca5a5" : "#f0e6d3",
+          fontSize: 20, fontWeight: 900,
+        }),
+        navBtn: (active) => ({
+          flex: 1, padding: "13px", borderRadius: 13, border: "none", cursor: "pointer",
+          background: active ? T.btnGrad : "rgba(255,255,255,.06)",
+          color: active ? "#fff" : "#6b7280", fontWeight: 800, fontSize: 14,
+        }),
+      };
+
+      // Loading ekranı
+      if (loading) return (
+        <div style={{ minHeight: "100vh", background: "#111", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+          <div style={{ fontSize: 48 }}>💪</div>
+          <div style={{ fontSize: 16, color: "#6b7280", fontFamily: "'Trebuchet MS', sans-serif" }}>Veriler yükleniyor...</div>
+          <div style={{ width: 48, height: 4, background: "#222", borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ width: "60%", height: "100%", background: "linear-gradient(90deg,#e8722a,#f5c842)", borderRadius: 2, animation: "none" }} />
+          </div>
+        </div>
+      );
+
+      return (
+        <div style={S.page}>
+          <div style={S.header}>
+            {/* Kullanıcı geçiş */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              {USERS.map((u, i) => (
+                <button key={u.id} onClick={() => { setActiveUser(i); setExpanded(null); }} style={{
+                  flex: 1, padding: "10px 8px", borderRadius: 14, border: "none", cursor: "pointer",
+                  background: activeUser === i ? T.btnGrad : "rgba(255,255,255,.05)",
+                  color: activeUser === i ? "#fff" : "#6b7280",
+                  fontWeight: 900, fontSize: 15,
+                  boxShadow: activeUser === i ? `0 3px 12px rgba(${T.pRgb},.4)` : "0 0 0 1px rgba(255,255,255,.07)",
+                  transition: "all .2s",
+                }}>
+                  {u.emoji} {u.name}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 10, letterSpacing: 3, color: T.primary, fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>💪 SUPERHERO PROGRAM</div>
+                <div style={{ fontSize: 26, fontWeight: 900, lineHeight: 1.15, ...S.gradText }}>
+                  {USERS[activeUser].name}'s Tracker
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 4 }}>Vücut Ağırlığı</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <input type="number" value={bodyWeight} onChange={e => setBodyWeight(e.target.value)}
+                    style={{ width: 58, background: `rgba(${T.pRgb},.12)`, border: `1px solid rgba(${T.pRgb},.3)`, borderRadius: 8, color: T.light, fontSize: 19, fontWeight: 900, textAlign: "center", padding: "4px" }} />
+                  <span style={{ color: "#6b7280", fontSize: 13 }}>kg</span>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 4 }}>
+              <div style={{ fontSize: 10, color: "#4b5563", fontWeight: 600, letterSpacing: 1, textTransform: "uppercase", marginBottom: 7 }}>Hafta Seç</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6 }}>
+                {WEEKS.map((w, i) => {
+                  const hasData = Object.values(data[w] || {}).some(ex => ex.sets && ex.sets.length > 0);
+                  const isActive = weekIdx === i;
+                  return (
+                    <button key={w} onClick={() => setWeekIdx(i)} style={{
+                      padding: "8px 0", borderRadius: 22, border: "none", cursor: "pointer",
+                      fontSize: 12, fontWeight: 800, textAlign: "center",
+                      background: isActive ? T.btnGrad : hasData ? `rgba(${T.pRgb},.18)` : "rgba(255,255,255,.05)",
+                      color: isActive ? "#fff" : hasData ? T.light : "#4b5563",
+                      boxShadow: isActive ? `0 3px 10px rgba(${T.pRgb},.45)` : "none",
+                      outline: (!isActive && hasData) ? `1px solid rgba(${T.pRgb},.25)` : "none",
+                      transition: "all .15s", position: "relative",
+                    }}>
+                      H{i + 1}
+                      {hasData && !isActive && (
+                        <span style={{ position: "absolute", top: 4, right: 6, width: 4, height: 4, borderRadius: "50%", background: T.primary }} />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 7, marginTop: 12, alignItems: "center" }}>
+              <span style={{ fontSize: 10, color: "#4b5563", fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Tema</span>
+              {THEMES.map((t, i) => (
+                <button key={i} onClick={() => setThemeIdx(i)} title={t.name} style={{
+                  width: 28, height: 28, borderRadius: "50%",
+                  border: themeIdx === i ? "2.5px solid #fff" : "2px solid rgba(255,255,255,.12)",
+                  background: t.btnGrad, cursor: "pointer", flexShrink: 0,
+                  boxShadow: themeIdx === i ? `0 0 10px ${t.primary}` : "none",
+                  transition: "all .2s",
+                }} />
+              ))}
+              <span style={{ fontSize: 11, color: "#6b7280", marginLeft: 2 }}>{THEMES[themeIdx].name}</span>
+            </div>
+          </div>
+
+          {!showProgress ? (
+            <div style={{ padding: "14px 16px 140px" }}>
+              <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+                {["A", "B", "C"].map(w => (
+                  <button key={w} onClick={() => setWorkout(w)} style={{
+                    flex: 1, padding: "14px 8px", borderRadius: 14, border: "none", cursor: "pointer",
+                    background: workout === w ? `rgba(${T.pRgb},.25)` : "rgba(255,255,255,.04)",
+                    color: workout === w ? T.light : "#6b7280", fontWeight: 800, fontSize: 15,
+                    boxShadow: workout === w ? `0 0 0 1.5px rgba(${T.pRgb},.5)` : "0 0 0 1px rgba(255,255,255,.07)",
+                  }}>WORKOUT {w}</button>
+                ))}
+              </div>
+
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 12 }}>
+                  <span style={{ color: "#6b7280", fontWeight: 600 }}>{weekKey} · Workout {workout}</span>
+                  <span style={{ color: T.light, fontWeight: 800 }}>{completed}/{exercises.length} tamamlandı</span>
+                </div>
+                <div style={{ height: 7, background: "rgba(255,255,255,.06)", borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ height: "100%", borderRadius: 4, width: `${(completed / exercises.length) * 100}%`, background: T.barGrad, transition: "width .5s" }} />
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {exercises.map(ex => {
+                  const exInfo = getExConfig(ex, workout) || { sets: 3, reps: "max", inc: 0 };
+                  const exd = getEx(ex);
+                  const weight = exd.weight;
+                  const loggedSets = exd.sets || [];
+                  const isBodyweight = weight === "bodyweight" || exInfo.reps === "max";
+                  const filledCount = loggedSets.filter(s => s !== null && s !== undefined && s !== "").length;
+                  const isComplete = filledCount >= exInfo.sets;
+                  const { success } = checkSuccess(ex, loggedSets, workout);
+                  const isOpen = expanded === ex;
+                  const nextW = !isBodyweight && typeof weight === "number" ? (success ? weight + exInfo.inc : weight) : null;
+
+                  function getCol(val) {
+                    if (val === null || val === undefined || val === "") return "empty";
+                    if (isNaN(Number(val))) return "text";
+                    const { min } = parseReps(exInfo.reps);
+                    return Number(val) >= min ? "ok" : "fail";
+                  }
+
+                  if (!isOpen) return (
+                    <button key={ex} onClick={() => setExpanded(ex)} style={{
+                      background: isComplete
+                        ? (success ? "linear-gradient(145deg,#1a3a2a,#0f2a1a)" : "linear-gradient(145deg,#3a1a1a,#2a0f0f)")
+                        : `linear-gradient(145deg,${T.light},${T.primary})`,
+                      border: isComplete ? (success ? "2px solid rgba(52,211,153,.4)" : "2px solid rgba(239,68,68,.3)") : "2px solid transparent",
+                      borderRadius: 18, padding: "20px 16px 16px", cursor: "pointer",
+                      display: "flex", flexDirection: "column", alignItems: "flex-start",
+                      gap: 10, textAlign: "left", minHeight: 160, position: "relative", overflow: "hidden",
+                    }}>
+                      {isComplete && (
+                        <div style={{ position: "absolute", top: 12, right: 12, width: 26, height: 26, borderRadius: "50%", background: success ? "#10b981" : "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 900, color: "#fff" }}>{success ? "✓" : "✗"}</div>
+                      )}
+                      {!isComplete && (
+                        <div style={{ position: "absolute", top: 12, right: 12, display: "flex", gap: 4 }}>
+                          {Array.from({ length: exInfo.sets }, (_, i) => (
+                            <div key={i} style={{ width: 7, height: 7, borderRadius: "50%", background: i < filledCount ? "#1a1a1a" : "rgba(0,0,0,.2)" }} />
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 14, fontWeight: 900, color: isComplete ? (success ? "#6ee7b7" : "#fca5a5") : "#1a1a1a", lineHeight: 1.3, paddingRight: 28 }}>{ex}</div>
+                      <div style={{ fontSize: 24, fontWeight: 900, color: isComplete ? (success ? "#34d399" : "#f87171") : "#1a1a1a" }}>
+                        {isBodyweight ? (ex === "Assisted Pull Ups" && exd.assist ? `🤝 ${exd.assist}kg` : "V.A.") : weight ? `${weight} kg` : "— kg"}
+                      </div>
+                      <div style={{ marginTop: "auto", width: "100%", padding: "9px 0 0", borderTop: `1px solid ${isComplete ? "rgba(255,255,255,.12)" : "rgba(0,0,0,.18)"}`, fontSize: 12, fontWeight: 700, color: isComplete ? (success ? "#6ee7b7" : "#fca5a5") : "#1a1a1a", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span>{exInfo.sets}×{exInfo.reps}</span>
+                        {isComplete && nextW !== null && <span style={{ fontSize: 11, color: success ? "#34d399" : "#fbbf24" }}>{success ? `↑ ${nextW}` : "→ sabit"}</span>}
+                        {!isComplete && <span style={{ fontSize: 11, color: "rgba(0,0,0,.45)" }}>Gir →</span>}
+                      </div>
+                    </button>
+                  );
+
+                  return (
+                    <div key={ex} style={{ gridColumn: "1 / -1", background: `linear-gradient(145deg,${T.hbg},#0d0d0d)`, border: `2px solid rgba(${T.pRgb},.5)`, borderRadius: 16, overflow: "hidden" }}>
+                      <button onClick={() => setExpanded(null)} style={{ width: "100%", padding: "14px 16px", background: "transparent", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{ width: 36, height: 36, borderRadius: "50%", background: T.btnGrad, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>💪</div>
+                        <div style={{ flex: 1, textAlign: "left" }}>
+                          <div style={{ fontWeight: 900, fontSize: 15, color: T.light }}>{ex}</div>
+                          <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>{exInfo.sets}×{exInfo.reps}{!isBodyweight && weight ? ` · ${weight} kg` : ""}</div>
+                        </div>
+                        <span style={{ color: T.primary, fontSize: 13, fontWeight: 700 }}>▲ Kapat</span>
+                      </button>
+                      <div style={{ padding: "0 16px 16px" }}>
+                        {!isBodyweight && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, padding: "10px 12px", background: "rgba(255,255,255,.04)", borderRadius: 10 }}>
+                            <span style={{ fontSize: 12, color: "#9ca3af" }}>Ağırlık:</span>
+                            <input type="number" step="2.5" value={typeof weight === "number" ? weight : ""} onChange={e => setWeight(ex, e.target.value)}
+                              style={{ width: 72, padding: "5px 8px", textAlign: "center", background: `rgba(${T.pRgb},.12)`, border: `1.5px solid rgba(${T.pRgb},.4)`, borderRadius: 8, color: T.light, fontSize: 17, fontWeight: 900 }} />
+                            <span style={{ fontSize: 12, color: "#6b7280" }}>kg</span>
+                            <span style={{ marginLeft: "auto", fontSize: 11, color: "#6b7280" }}>+{exInfo.inc} kg/hafta</span>
+                          </div>
+                        )}
+                        {ex === "Assisted Pull Ups" && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, padding: "10px 12px", background: "rgba(99,102,241,.08)", borderRadius: 10, border: "1px solid rgba(99,102,241,.3)" }}>
+                            <span style={{ fontSize: 16 }}>🤝</span>
+                            <span style={{ fontSize: 12, color: "#a5b4fc" }}>Assist:</span>
+                            <input type="number" step="2" placeholder="—" value={exd.assist ?? ""} onChange={e => setAssist("Assisted Pull Ups", e.target.value)}
+                              style={{ width: 68, padding: "5px 8px", textAlign: "center", background: "rgba(99,102,241,.15)", border: "1.5px solid rgba(99,102,241,.5)", borderRadius: 8, color: "#c7d2fe", fontSize: 17, fontWeight: 900 }} />
+                            <span style={{ fontSize: 12, color: "#6b7280" }}>kg yardım</span>
+                            {exd.assist && <span style={{ marginLeft: "auto", fontSize: 11, color: "#818cf8", fontWeight: 700 }}>↓ az = güçlü</span>}
+                          </div>
+                        )}
+                        <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(exInfo.sets, 4)}, 1fr)`, gap: 8, marginBottom: 12 }}>
+                          {Array.from({ length: exInfo.sets }, (_, i) => {
+                            const val = loggedSets[i];
+                            const col = getCol(val);
+                            return (
+                              <div key={i}>
+                                <div style={{ fontSize: 10, color: "#6b7280", textAlign: "center", marginBottom: 4 }}>Set {i + 1}</div>
+                                <input type={ex === "Plank" ? "text" : "number"}
+                                  placeholder={exInfo.reps === "max" ? "max" : typeof exInfo.reps === "number" ? String(exInfo.reps) : exInfo.reps.split("-")[0]}
+                                  value={val ?? ""} onChange={e => logSet(ex, i, e.target.value)}
+                                  style={S.setInput(col === "empty" ? null : col)} />
+                                <div style={{ fontSize: 9, color: "#4b5563", textAlign: "center", marginTop: 3 }}>{ex === "Plank" ? "süre" : "tekrar"}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div style={{ padding: "8px 12px", borderRadius: 9, background: "rgba(255,255,255,.03)", fontSize: 11, color: "#9ca3af", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+                          <span>🎯 {exInfo.sets}×{exInfo.reps} tekrar</span>
+                          {!isBodyweight && isComplete && nextW !== null && (
+                            <span style={{ fontWeight: 700, color: success ? "#34d399" : "#fbbf24" }}>
+                              {success ? `↑ Sonraki: ${nextW} kg` : `→ Sabit: ${weight} kg`}
+                            </span>
+                          )}
+                        </div>
+                        {exd.note && <div style={{ marginBottom: 6, padding: "6px 10px", background: "rgba(251,191,36,.08)", borderRadius: 8, fontSize: 12, color: "#fbbf24" }}>📝 {exd.note}</div>}
+                        <input placeholder="Not ekle / düzenle..." value={exd.note || ""} onChange={e => setNote(ex, e.target.value)}
+                          style={{ width: "100%", padding: "8px 10px", boxSizing: "border-box", background: "rgba(255,255,255,.03)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 8, color: "#9ca3af", fontSize: 12 }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: "16px 16px 140px" }}>
+              <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 18, ...S.gradText }}>📈 {USERS[activeUser].name} — İlerleme Grafiği</div>
+              {["Bench Press", "Squat", "Over Head Press", "Romanian DL", "Shoulder Press Machine", "Machine Row", "Lat Pulldown", "Leg Extension", "Cable Pushdown", "Incline Dumbbell Curl", "Cable Lateral Raises"].map(ex => {
+                const weights = WEEKS.map(w => { const d = data[w]?.[ex]; return d && typeof d.weight === "number" ? d.weight : null; });
+                const valid = weights.filter(w => w !== null);
+                if (valid.length === 0) return null;
+                const maxW = Math.max(...valid), minW = Math.min(...valid), range = maxW - minW || 1;
+                const diff = valid[valid.length - 1] - valid[0];
+                return (
+                  <div key={ex} style={{ marginBottom: 14, padding: "14px 14px 10px", background: "rgba(255,255,255,.03)", borderRadius: 14, border: "1px solid rgba(255,255,255,.07)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13 }}>{ex}</div>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: diff >= 0 ? "#34d399" : "#f87171" }}>{diff >= 0 ? "+" : ""}{diff.toFixed(1)} kg</span>
+                        <span style={{ fontSize: 14, color: T.light, fontWeight: 800 }}>{weights[weekIdx] ?? "-"} kg</span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 48 }}>
+                      {WEEKS.map((w, i) => {
+                        const wt = weights[i];
+                        if (!wt) return <div key={i} style={{ flex: 1 }}><div style={{ height: 4, borderRadius: "2px 2px 0 0", background: "rgba(255,255,255,.04)" }} /><div style={{ fontSize: 7, color: "#374151", textAlign: "center", marginTop: 2 }}>{i + 1}</div></div>;
+                        const h = Math.max(6, ((wt - minW) / range) * 36 + 12);
+                        return (
+                          <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                            <div style={{ width: "100%", height: h, borderRadius: "3px 3px 0 0", background: i === weekIdx ? T.chartGrad : `rgba(${T.pRgb},.35)` }} />
+                            <div style={{ fontSize: 7, color: i === weekIdx ? T.light : "#4b5563" }}>{i + 1}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 10, color: "#6b7280" }}>
+                      <span>Başlangıç: {valid[0]} kg</span>
+                      <span>Maks: {maxW} kg</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 480, background: `linear-gradient(0deg,${T.hbg} 65%,rgba(0,0,0,0))`, padding: "12px 16px 20px", zIndex: 200 }}>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button onClick={() => setShowProgress(false)} style={S.navBtn(!showProgress)}>🏋️ Antrenman</button>
+              <button onClick={() => setShowProgress(true)} style={S.navBtn(showProgress)}>📊 İlerleme</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+
+  <script>
+    // PWA Install
+    let deferredPrompt = null;
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault(); deferredPrompt = e;
+      if (!isStandalone) document.getElementById('install-banner').classList.add('show');
+    });
+    document.getElementById('install-btn').addEventListener('click', async () => {
+      if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; }
+      document.getElementById('install-banner').classList.remove('show');
+    });
+    document.getElementById('dismiss-btn').addEventListener('click', () => {
+      document.getElementById('install-banner').classList.remove('show');
+    });
+  </script>
+</body>
+</html>
